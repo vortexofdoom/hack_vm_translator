@@ -1,12 +1,112 @@
-// comment
-pub fn comment(comment: &str) -> String {
-    format!("
+use crate::{VmCommand, Comparison, MemSegment};
+use std::fmt::Display;
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::path::Path;
+
+pub struct CodeWriter {
+    filename: String,
+    writer: BufWriter<File>,
+    curr_func: String,
+    comp_count: u16,
+    call_count: u16,
+}
+
+impl CodeWriter {
+    pub fn new(filename: &str, bootstrap: bool) -> Self {
+        let output = File::create(Path::new(filename).with_extension("asm")).expect("could not create file");
+        let mut writer = BufWriter::new(output);
+        if bootstrap {
+            let call_sys_init = call_func("Sys.init", 0, format!("Sys.init never returns"));
+            write!(writer, "\
+    @256
+    D=A
+    @SP
+    M=D
+    {call_sys_init}
+    ").expect("failed to write bootstrap code");
+        };
+        CodeWriter {
+            filename: filename.to_string(),
+            writer: writer,
+            curr_func: format!("${filename}$"),
+            comp_count: 0,
+            call_count: 0,
+        }
+    }
+
+    pub fn set_file_name(&mut self, filename: &str) {
+        self.filename = filename.to_string();
+    }
+
+    pub fn flush(&mut self) {
+        self.writer.flush().unwrap();
+    }
+
+    // comment
+    pub fn comment(&mut self, comment: &str) {
+    write!(self.writer, "
 // {comment}
-    ")
+    ").expect("failed to insert comment");
+}
+
+    pub fn generate_code(&mut self, command: VmCommand) {
+        let asm: String;
+        match command {
+            VmCommand::Add => asm = arithmetic_two_args("M=D+M"),
+            VmCommand::Sub => asm = arithmetic_two_args("M=M-D"),
+            VmCommand::Neg => asm = arithmetic_one_arg("-"),
+            VmCommand::Compare(comp) => {
+                asm = comparison(comp, self.comp_count);
+                self.comp_count += 1;
+            }
+            VmCommand::And => asm = arithmetic_two_args("M=D&M"),
+            VmCommand::Or => asm = arithmetic_two_args("M=D|M"),
+            VmCommand::Not => asm = arithmetic_one_arg("!"),
+            VmCommand::Push(seg, n) => {
+                asm = match seg {
+                    MemSegment::Argument => push_segment("ARG", n),
+                    MemSegment::Local => push_segment("LCL", n),
+                    MemSegment::This => push_segment("THIS", n),
+                    MemSegment::That => push_segment("THAT", n),
+                    MemSegment::Static => push_value(format!("{}.{n}", self.filename), false),
+                    MemSegment::Pointer => push_value(if n == 0 { "THIS" } else { "THAT" }, false), // could probably just change this to n + 3
+                    MemSegment::Temp => push_value(n + 5, false),
+                    MemSegment::Constant => push_value(n, true),
+                }
+            }
+            VmCommand::Pop(seg, n) => {
+                asm = match seg {
+                    MemSegment::Argument => pop_segment("ARG", n),
+                    MemSegment::Local => pop_segment("LCL", n),
+                    MemSegment::This => pop_segment("THIS", n),
+                    MemSegment::That => pop_segment("THAT", n),
+                    MemSegment::Static => pop_value(format!("{}.{n}", self.filename)),
+                    MemSegment::Pointer => pop_value(if n == 0 { "THIS" } else { "THAT" }),
+                    MemSegment::Temp => pop_value(n + 5),
+                    _ => String::from("cannot pop to constant"),
+                }
+            }
+            VmCommand::Label(l) => asm = def_label(format!("{}${}", self.curr_func, l)),
+            VmCommand::Goto(l) => asm = goto(format!("{}${}", self.curr_func, l)),
+            VmCommand::IfGoto(l) => asm = if_goto(format!("{}${}", self.curr_func, l)),
+            VmCommand::Function(f, n) => {
+                self.curr_func = f.to_string();
+                asm = func(f, n);
+            },
+            VmCommand::Call(f, n) => {
+                let return_label = format!("{}.ret${}", self.filename, self.call_count);
+                asm = call_func(f, n, return_label);
+                self.call_count += 1;
+            },
+            VmCommand::Return => asm = return_func(),
+        };
+        write!(self.writer, "{asm}").expect("failed to write command to asm file");
+    }
 }
 
 // not and neg
-pub fn arithmetic_one_arg(operator: &str) -> String {
+fn arithmetic_one_arg(operator: &str) -> String {
     format!("\
     @SP
     A=M-1
@@ -15,7 +115,7 @@ pub fn arithmetic_one_arg(operator: &str) -> String {
 }
 
 // add, sub, and, or, and start of comparisons
-pub fn arithmetic_two_args(last_line: &str) -> String {
+fn arithmetic_two_args(last_line: &str) -> String {
     format!("\
     @SP
     AM=M-1
@@ -26,14 +126,14 @@ pub fn arithmetic_two_args(last_line: &str) -> String {
 }
 
 // eq, gt, lt
-pub fn comparison(comparison: &str, counter: u32) -> String {
+fn comparison(comparison: Comparison, counter: u16) -> String {
     let comp_str = match comparison {
         // jumping if comparison is false
-        "eq" => "NE",
-        "gt" => "LE",
-        "lt" => "GE",
-        _ => panic!("nothing should be passing a string literal other than eq, gt, or lt"),
+        Comparison::Eq => "NE",
+        Comparison::GT => "LE",
+        Comparison::LT => "GE",
     };
+    
     arithmetic_two_args("MD=M-D") + &format!("\
     @END_COMP{counter}
     D;J{comp_str}
@@ -46,7 +146,8 @@ pub fn comparison(comparison: &str, counter: u32) -> String {
 }
 
 // local, argument, this, that
-pub fn push_segment(segment: &str, n: u16) -> String {
+pub fn push_segment<T>(segment: T, n: u16) -> String
+where T: Display {
     format!("\
     @{n}
     D=A
@@ -59,7 +160,8 @@ pub fn push_segment(segment: &str, n: u16) -> String {
     M=D
     ")
 }
-pub fn pop_segment(segment: &str, n: u16) -> String {
+pub fn pop_segment<T>(segment: T, n: u16) -> String
+where T: Display {
     format!("\
     @{n}
     D=A
@@ -73,8 +175,9 @@ pub fn pop_segment(segment: &str, n: u16) -> String {
     ")
 }
 // static, pointer, constant (push only)
-pub fn push_static_or_pointer(var: String, constant: bool) -> String {
-    let comp_a_or_m = if constant {"A"} else {"M"};
+fn push_value<T>(var: T, use_a_over_m: bool) -> String
+where T: Display {
+    let comp_a_or_m = if use_a_over_m {"A"} else {"M"};
     format!("\
     @{var}
     D={comp_a_or_m}
@@ -85,12 +188,116 @@ pub fn push_static_or_pointer(var: String, constant: bool) -> String {
     ")
 }
 
-pub fn pop_static_or_pointer(var: String) -> String {
+fn pop_value<T>(var: T) -> String 
+where T: Display {
     format!("\
     @SP
     AM=M-1
     D=M
     @{var}
     M=D
+    ")
+}
+
+fn def_label(label: String) -> String {
+    format!("\
+    ({label})
+    ")
+}
+fn goto(label: String) -> String {
+    format!("\
+    @{label}
+    0;JMP
+    ")
+}
+fn if_goto(label: String) -> String {
+    format!("\
+    @SP
+    AM=M-1
+    D=M+1
+    @{label}
+    D;JEQ
+    ")
+}
+
+fn func(fn_name: &str, n_vars: u16) -> String {
+    format!("\
+({fn_name})
+    @{n_vars}
+    D=A
+    @LCL
+    A=D+M
+    M=0
+    D=D-1
+    ")
+}
+
+fn call_func(function: &str, n_args: u16, return_label: String) -> String {
+    let return_addr = push_value(&return_label, true);
+    let saved_lcl = push_value("LCL", false);
+    let saved_arg = push_value("ARG", false);
+    let saved_this = push_value("THAT", false);
+    let saved_that = push_value("THAT", false);
+    
+    format!("\
+    {return_addr}
+    {saved_lcl}
+    {saved_arg}
+    {saved_this}
+    {saved_that}
+    @{n_args}
+    D=A
+    @5
+    D=D+A
+    @SP
+    D=M-D
+    @ARG
+    M=D
+    @SP
+    D=M
+    @LCL
+    M=D
+    @{function}
+    0;JMP
+({return_label})
+    ")
+}
+
+fn return_func() -> String {
+    format!("\
+    @SP
+    A=M-1
+    D=M
+    @ARG
+    A=M
+    M=D
+    D=A
+    @SP
+    M=D+1
+    @LCL
+    A=M-1
+    @R13
+    AM=D
+    D=M
+    @THAT
+    M=D
+    @R13
+    AM=M-1
+    D=M
+    @THIS
+    M=D
+    @R13
+    AM=M-1
+    D=M
+    @ARG
+    M=D
+    @R13
+    AM=M-1
+    D=M
+    @LCL
+    M=D
+    @R13
+    A=M-1
+    0;JMP
     ")
 }
