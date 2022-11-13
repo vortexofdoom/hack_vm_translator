@@ -23,7 +23,7 @@ pub fn parse(cmd: &str) -> Result<VmCommand, String> {
             match parts[0] {
                 "label" => VmCommand::Label(parts[1]),
                 "goto" => VmCommand::Goto(parts[1]),
-                "if_goto" => VmCommand::IfGoto(parts[1]),
+                "if-goto" => VmCommand::IfGoto(parts[1]),
                 _ => return Err(format!("No two word command \"{cmd}\"")),
             }
         }
@@ -50,13 +50,13 @@ pub fn parse(cmd: &str) -> Result<VmCommand, String> {
                 ("push", "constant") => VmCommand::Push(MemSegment::Constant, arg),
 
                 ("push", "static")   => VmCommand::Push(MemSegment::Static, arg),
-                ("pop", "static")    => VmCommand::Push(MemSegment::Static, arg),
+                ("pop", "static")    => VmCommand::Pop(MemSegment::Static, arg),
 
                 ("push", "pointer")  => VmCommand::Push(MemSegment::Pointer, arg),
                 ("pop", "pointer")   => VmCommand::Pop(MemSegment::Pointer, arg),
 
                 ("push", "temp")     => VmCommand::Push(MemSegment::Temp, arg),
-                ("pop", "temp")      => VmCommand::Pop(MemSegment::Static, arg),
+                ("pop", "temp")      => VmCommand::Pop(MemSegment::Temp, arg),
                 
                 ("function", _) => VmCommand::Function(parts[1], arg),
                 ("call", _) => VmCommand::Call(parts[1], arg),

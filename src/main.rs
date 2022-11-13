@@ -88,6 +88,7 @@ fn main() {
                         .trim()
                         .to_string();
                     if !cmd.is_empty() {
+                        writer.comment(&cmd);
                         let vm_cmd = parser::parse(&cmd).expect("could not parse command");
                         writer.generate_code(vm_cmd);
                     }

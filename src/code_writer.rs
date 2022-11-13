@@ -19,10 +19,12 @@ impl CodeWriter {
         if bootstrap {
             let call_sys_init = call_func("Sys.init", 0, format!("Sys.init never returns"));
             write!(writer, "\
+// bootstrap code
     @256
     D=A
     @SP
     M=D
+// call sys_init
     {call_sys_init}
     ").expect("failed to write bootstrap code");
         };
@@ -214,9 +216,9 @@ fn if_goto(label: String) -> String {
     format!("\
     @SP
     AM=M-1
-    D=M+1
+    D=M
     @{label}
-    D;JEQ
+    D;JNE
     ")
 }
 
@@ -225,22 +227,31 @@ fn func(fn_name: &str, n_vars: u16) -> String {
 ({fn_name})
     @{n_vars}
     D=A
+    @SP
+    AM=D+M
+    D=D-1
+({fn_name}$LocalLoop)
+    @{fn_name}$LocalLoopEnd
+    D;JLT
     @LCL
     A=D+M
     M=0
     D=D-1
+    @{fn_name}$LocalLoop
+    0;JMP
+({fn_name}$LocalLoopEnd)
     ")
 }
 
 fn call_func(function: &str, n_args: u16, return_label: String) -> String {
-    let return_addr = push_value(&return_label, true);
+    let saved_return_addr = push_value(&return_label, true);
     let saved_lcl = push_value("LCL", false);
     let saved_arg = push_value("ARG", false);
-    let saved_this = push_value("THAT", false);
+    let saved_this = push_value("THIS", false);
     let saved_that = push_value("THAT", false);
     
     format!("\
-    {return_addr}
+    {saved_return_addr}
     {saved_lcl}
     {saved_arg}
     {saved_this}
@@ -265,39 +276,53 @@ fn call_func(function: &str, n_args: u16, return_label: String) -> String {
 
 fn return_func() -> String {
     format!("\
+    @5
+    D=A
+    @LCL
+    A=M-D
+    D=M
+    @R14
+    M=D
+
     @SP
     A=M-1
     D=M
     @ARG
     A=M
     M=D
-    D=A
+    D=A+1
     @SP
-    M=D+1
+    M=D
+
     @LCL
-    A=M-1
+    D=M-1
     @R13
     AM=D
+
     D=M
     @THAT
     M=D
+
     @R13
     AM=M-1
     D=M
     @THIS
     M=D
+
     @R13
     AM=M-1
     D=M
     @ARG
     M=D
+
     @R13
     AM=M-1
     D=M
     @LCL
     M=D
-    @R13
-    A=M-1
+    
+    @R14
+    A=M
     0;JMP
     ")
 }
