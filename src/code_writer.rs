@@ -52,7 +52,10 @@ impl CodeWriter {
     ").expect("failed to insert comment");
 }
 
-    pub fn generate_code(&mut self, command: VmCommand) {
+    pub fn generate_code(&mut self, command: VmCommand, comment: bool) {
+        if comment {
+            write!(self.writer, "// {command}").expect("failed to write comment");
+        }
         let asm: String;
         match command {
             VmCommand::Add => asm = arithmetic_two_args("M=D+M"),
@@ -320,7 +323,7 @@ fn return_func() -> String {
     D=M
     @LCL
     M=D
-    
+
     @R14
     A=M
     0;JMP
