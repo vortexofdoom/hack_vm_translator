@@ -10,6 +10,7 @@ pub struct CodeWriter {
     curr_func: String,
     comp_count: u16,
     call_count: u16,
+    return_written: bool,
 }
 
 impl CodeWriter {
@@ -34,6 +35,7 @@ impl CodeWriter {
             curr_func: format!("${filename}$"),
             comp_count: 0,
             call_count: 0,
+            return_written: false,
         }
     }
 
@@ -104,7 +106,14 @@ impl CodeWriter {
                 asm = call_func(f, n, return_label);
                 self.call_count += 1;
             },
-            VmCommand::Return => asm = return_func(),
+            VmCommand::Return => {
+                if self.return_written {
+                    asm = return_func();
+                } else {
+                    asm = write_return();
+                    self.return_written = true;
+                }
+            },
         };
         write!(self.writer, "{asm}").expect("failed to write command to asm file");
     }
@@ -279,6 +288,14 @@ fn call_func(function: &str, n_args: u16, return_label: String) -> String {
 
 fn return_func() -> String {
     format!("\
+    @$$RETURN
+    0;JMP
+    ")
+}
+
+fn write_return() -> String {
+    format!("\
+($$RETURN)
     @5
     D=A
     @LCL
